@@ -18,6 +18,8 @@ Small tweaks for the [Dia](https://www.diabrowser.com) browser, kept in place wh
 - Extensions button beside the pinned extensions, opening the Extensions menu
 - Peek on Shift-click: preview a link over the current page, like Arc
 
+Right-click a tab and choose **Group Tabs by Domain**, under **New Group with Tab**. The same command is in the menu bar, in the Tab menu if Dia has one, otherwise in the menu that holds the tab commands.
+
 Unofficial and not affiliated with The Browser Company. Apple Silicon, macOS 14 or later.
 
 ## Install
@@ -39,7 +41,7 @@ Dia quits and reopens. When macOS asks to access "Dia Safe Storage", enter your 
 - Everything is built on your Mac from this source. The only download is Dia itself, from The Browser Company's own update feed, and it's used only if it's signed by The Browser Company and passes Gatekeeper.
 - An untouched copy of the official Dia is kept in `~/Library/Application Support/DiaPatches/pristine`. Restoring puts it back.
 - The patched Dia gets one extra line that loads the add-on, its built-in updater is switched off (DiaTweaks updates it instead, keeping the patches), and it's re-signed with a certificate created on your Mac, in your login keychain, called "DiaPatches Local Signing". Nothing is signed with anyone else's certificate.
-- The add-on only rearranges Dia's own interface. It doesn't read your pages, history or passwords, and its only network use is checking Dia's update feed.
+- The add-on only rearranges Dia's own interface. Group Tabs by Domain reads the address of each open tab in the current window, not the page. It doesn't read your pages, history or passwords, and its only network use is checking Dia's update feed.
 - Nothing runs in the background. Updates are checked when Dia opens and installed when you quit it.
 - Because the app is now signed by you, macOS asks once per Dia update before Dia can read "Dia Safe Storage". Dia's built-in passkey support is off, since only The Browser Company can sign for it; signing in with a password works.
 
