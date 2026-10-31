@@ -7,6 +7,7 @@ Small tweaks for the [Dia](https://www.diabrowser.com) browser, kept in place wh
 - Hide toolbar
 - Hide sidebar button
 - Hide Chat button
+- Peek on Shift-click: preview a link over the current page, like Arc
 
 Unofficial and not affiliated with The Browser Company. Apple Silicon, macOS 14 or later.
 
