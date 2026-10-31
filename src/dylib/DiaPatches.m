@@ -308,8 +308,7 @@ static NSRect DPEdgeToEdgeFrame(NSView *view, NSRect frame) {
     BOOL (^isPadding)(CGFloat) = ^BOOL(CGFloat gap) { return fabs(gap - DPWindowPadding) < 0.5; };
     if (isPadding(left)) frame.origin.x -= inset, frame.size.width += inset;
     if (isPadding(right)) frame.size.width += inset;
-    // The top gap also includes any title bar or menu bar offset.
-    if (top > DPWindowPadding - 0.5) {
+    if (isPadding(top)) {
         frame.size.height += inset;
         if (superview.isFlipped) frame.origin.y -= inset;
     }

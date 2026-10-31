@@ -52,3 +52,7 @@ Or from Terminal:
 ```sh
 ~/Library/Application\ Support/DiaPatches/bin/diapatch uninstall --relaunch --purge
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). PRs need a screenshot or screen recording of the change.
