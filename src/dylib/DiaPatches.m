@@ -821,7 +821,8 @@ static void DPApplyCorners(NSWindow *window) {
     }
     if (radius == target) return;
     ((void (*)(id, SEL, CGFloat))objc_msgSend)(window, setter, target);
-    ((void (*)(id, SEL))objc_msgSend)(window, NSSelectorFromString(@"_updateWindowCornerMask"));
+    SEL updateMask = NSSelectorFromString(@"_updateWindowCornerMask");  // macOS 27; earlier versions don't have it
+    if ([window respondsToSelector:updateMask]) ((void (*)(id, SEL))objc_msgSend)(window, updateMask);
     [window invalidateShadow];
     dispatch_async(dispatch_get_main_queue(), ^{ DPRelayout(); });
 }
