@@ -18,6 +18,7 @@ static const CGFloat DPLargerCornerRadius = 26;
 static const CGFloat DPToolbarButtonSize = 30, DPToolbarSlot = 35;  // Dia's translate button and the gap after it
 static const CGFloat DPRevealEdge = 8;  // how near the top of the page the pointer brings back a hidden toolbar
 static const NSTimeInterval DPRevealDelay = 0.12, DPConcealDelay = 1.4;
+static const CGFloat DPPinnedTabRadius = 10;
 
 static BOOL DPOn[DPTweakCount];
 static CGFloat DPProgress[DPAnimatedCount];
@@ -88,6 +89,12 @@ static IMP DPOriginalIMP(id object, SEL sel) {
 #define DPCallOriginal(type, object, sel, ...) ((type)DPOriginalIMP(object, sel))(object, sel, ##__VA_ARGS__)
 
 #pragma mark - Toolbar buttons
+
+// Keeps the page concentric with the window when the window's corners grow, and the buttons in the corners clear of them.
+static CGFloat DPWindowCornerGrowth(NSWindow *window) {
+    NSNumber *original = window ? objc_getAssociatedObject(window, &DPCornerRadiusKey) : nil;
+    return DPOn[DPLargerWindowCorners] && original ? DPLargerCornerRadius - original.doubleValue : 0;
+}
 
 static Class DPDownloadsButtonClass(void) {
     static Class cls;
@@ -192,17 +199,34 @@ static void DPBar_layout(NSView *self, SEL _cmd) {
 
 // Dia lays out the tab strip's buttons here and closes the gap for Recent tabs, but not for Downloads.
 static void DPTabStrip_viewWillLayout(NSViewController *self, SEL _cmd) {
-    NSView *strip = self.view, *downloads = nil, *chats = nil;
+    NSView *strip = self.view, *downloads = nil, *chats = nil, *recent = nil, *pinned = nil, *tabs = nil;
     [DPBars addObject:strip];
     for (NSView *sub in strip.subviews) {
+        if ([sub isKindOfClass:DPPinnedTabsClass()]) pinned = sub;
+        if ([NSStringFromClass(sub.class) containsString:@"FeatheredContainerView"]) tabs = sub;
         NSInteger tweak = DPButtonTweak(sub);
         if (tweak < 0) continue;
         DPEnforceButtons(sub);
         if (tweak == DPHideDownloadsButton) downloads = sub;
         if (tweak == DPHideChatsButton) chats = sub;
+        if (tweak == DPHideRecentTabsButton) recent = sub;
     }
     DPCallOriginal(void (*)(id, SEL), self, _cmd);
     if (DPOn[DPHideDownloadsButton] && downloads && chats) [chats setFrameOrigin:downloads.frame.origin];
+
+    CGFloat growth = DPWindowCornerGrowth(strip.window);
+    if (growth <= 0) return;
+    for (NSView *button in @[recent ?: NSNull.null, downloads ?: NSNull.null, chats ?: NSNull.null])
+        if ([button isKindOfClass:NSView.class]) [button setFrameOrigin:NSMakePoint(NSMinX(button.frame) - growth, NSMinY(button.frame))];
+    // With the window controls hidden the pinned tabs sit in the corner, so their side gap matches the top one.
+    if (pinned && NSMinX(pinned.frame) < DPLargerCornerRadius) {
+        CGFloat shift = NSMinY(pinned.frame) - NSMinX(pinned.frame);
+        [pinned setFrameOrigin:NSMakePoint(NSMinX(pinned.frame) + shift, NSMinY(pinned.frame))];
+        NSRect frame = tabs.frame;
+        frame.origin.x += shift;
+        frame.size.width -= shift;
+        tabs.frame = frame;
+    }
 }
 
 // With nothing left in it, the sidebar header shrinks to the window padding and the pinned tabs move up. It stays in place because it's what drags the window.
@@ -212,6 +236,7 @@ static void DPCollapseSidebarHeader(NSView *sidebar) {
     for (NSView *sub in sidebar.subviews) if ([sub isKindOfClass:NSClassFromString(@"_TtC10TabSidebar17SidebarHeaderView")]) header = sub;
     NSView *stack = DPFindView(header, ^BOOL(NSView *v) { return [v isKindOfClass:NSStackView.class]; });
     if (!stack) return;
+    DPEnforceButtons(header);
     for (NSView *item in stack.subviews) if (!item.hidden && item.subviews.count) return;
     CGFloat bottom = NSMaxY(header.frame), gap = NSHeight(header.frame) - DPWindowPadding;
     if (gap <= 0) return;
@@ -249,15 +274,6 @@ static void DPSidebar_viewWillLayout(NSViewController *self, SEL _cmd) {
         frame.size.height += NSHeight(footer.frame);
         sub.frame = frame;
     }
-}
-
-// The visible border is a masked gradient layer. Dia shows and hides it with selection and never touches its opacity.
-static void DPPinnedTab_layout(NSView *self, SEL _cmd) {
-    DPCallOriginal(void (*)(id, SEL), self, _cmd);
-    [DPBars addObject:self];
-    DPEnforceButtons(self);
-    for (CALayer *layer in self.subviews.firstObject.layer.sublayers)
-        if ([layer isKindOfClass:CAGradientLayer.class]) layer.opacity = DPOn[DPHidePinnedTabBorder] ? 0 : 1;
 }
 
 // Dia creates this background lazily, and each tab inside has a debossed view of its own, so only direct children count.
@@ -317,12 +333,6 @@ static NSRect DPEdgeToEdgeFrame(NSView *view, NSRect frame) {
         if (!superview.isFlipped) frame.origin.y -= inset;
     }
     return frame;
-}
-
-// Keeps the page concentric with the window when the window's corners grow.
-static CGFloat DPWindowCornerGrowth(NSWindow *window) {
-    NSNumber *original = window ? objc_getAssociatedObject(window, &DPCornerRadiusKey) : nil;
-    return DPOn[DPLargerWindowCorners] && original ? DPLargerCornerRadius - original.doubleValue : 0;
 }
 
 static void DPSetCornerRadius(NSView *container, CGFloat inset) {
@@ -481,6 +491,9 @@ static Class DPContainerClass(void) {
 }
 
 static void DPRestyleContainer(NSView *container) {
+    // Dia resets the radius when the tab layout or window size changes, without going through setFrame:.
+    NSValue *laidOut = objc_getAssociatedObject(container, &DPRequestedFrameKey);
+    if (laidOut) DPSetCornerRadius(container, NSEqualRects(DPEdgeToEdgeFrame(container, laidOut.rectValue), laidOut.rectValue) ? 0 : DPProgress[DPEdgeToEdge] * DPWindowPadding);
     DPApplySquareCorners(container);
     CALayer *card = DPChatCard(container).layer;
     if (!card) return;
@@ -768,6 +781,43 @@ static void DPConcealAll(void) {
     }
 }
 
+#pragma mark - Pinned tabs
+
+// Scales every rounded layer in a pinned tab with the window's corners, and the border's mask with them.
+static void DPRoundPinnedTabLayer(CALayer *layer, CGFloat growth) {
+    NSNumber *base = [layer valueForKey:@"dpBaseRadius"];
+    if (!base && layer.cornerRadius >= DPPinnedTabRadius) [layer setValue:(base = @(layer.cornerRadius)) forKey:@"dpBaseRadius"];
+    if (base) {
+        CGFloat radius = MIN(base.doubleValue + growth, MIN(CGRectGetWidth(layer.bounds), CGRectGetHeight(layer.bounds)) / 2);
+        if (layer.cornerRadius != radius) layer.cornerRadius = radius;
+    }
+    CAShapeLayer *shape = [layer.mask isKindOfClass:CAShapeLayer.class] ? (CAShapeLayer *)layer.mask : nil;
+    if (shape.path) {
+        CGPathRef assigned = (__bridge CGPathRef)objc_getAssociatedObject(shape, &DPAssignedPathKey);
+        if (!assigned || !CGPathEqualToPath(assigned, shape.path))
+            objc_setAssociatedObject(shape, &DPOriginalPathKey, CFBridgingRelease(CGPathCreateCopy(shape.path)), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        CGRect box = CGPathGetBoundingBox(shape.path);
+        CGFloat scale = MIN(DPPinnedTabRadius + growth, MIN(CGRectGetWidth(box), CGRectGetHeight(box)) / 2) / DPPinnedTabRadius;
+        CGPathRef path = DPReshapeCorners((__bridge CGPathRef)objc_getAssociatedObject(shape, &DPOriginalPathKey), DPPinnedTabRadius * 1.6, scale, scale);
+        if (!CGPathEqualToPath(path, shape.path)) shape.path = path;
+        objc_setAssociatedObject(shape, &DPAssignedPathKey, (__bridge id)shape.path, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    for (CALayer *sublayer in layer.sublayers) DPRoundPinnedTabLayer(sublayer, growth);
+}
+
+// The visible border is a masked gradient layer. Dia shows and hides it with selection and never touches its opacity.
+static void DPPinnedTab_layout(NSView *self, SEL _cmd) {
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    [DPBars addObject:self];
+    DPEnforceButtons(self);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (CALayer *layer in self.subviews.firstObject.layer.sublayers)
+        if ([layer isKindOfClass:CAGradientLayer.class]) layer.opacity = DPOn[DPHidePinnedTabBorder] ? 0 : 1;
+    DPRoundPinnedTabLayer(self.layer, DPWindowCornerGrowth(self.window));
+    [CATransaction commit];
+}
+
 #pragma mark - Liquid Glass
 
 // Variant 17 is the system sidebar's glass; the default reads too clear at this size. The window has to stop being opaque for it to pick up what's behind.
@@ -823,7 +873,10 @@ static void DPApplyCorners(NSWindow *window) {
     SEL updateMask = NSSelectorFromString(@"_updateWindowCornerMask");  // macOS 27; earlier versions don't have it
     if ([window respondsToSelector:updateMask]) ((void (*)(id, SEL))objc_msgSend)(window, updateMask);
     [window invalidateShadow];
-    dispatch_async(dispatch_get_main_queue(), ^{ DPRelayout(); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        DPRelayout();
+        DPRelayoutBars();
+    });
 }
 
 static void DPWindowFrame_layout(NSView *self, SEL _cmd) {
