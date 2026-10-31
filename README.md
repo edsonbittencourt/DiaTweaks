@@ -16,6 +16,7 @@ Small tweaks for the [Dia](https://www.diabrowser.com) browser, kept in place wh
 - Liquid Glass background
 - Larger window corners
 - Extensions button beside the pinned extensions, opening the Extensions menu
+- Peek on Shift-click: preview a link over the current page, like Arc
 
 Unofficial and not affiliated with The Browser Company. Apple Silicon, macOS 14 or later.
 
