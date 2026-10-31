@@ -7,6 +7,14 @@ Small tweaks for the [Dia](https://www.diabrowser.com) browser, kept in place wh
 - Hide toolbar, optionally shown over the page while the pointer is at its top edge
 - Hide sidebar button
 - Hide Chat button
+- Hide Chats button
+- Hide downloads button
+- Hide recent tabs button
+- Hide pinned tabs background
+- Hide window controls
+- Hide pinned tab border
+- Liquid Glass background
+- Larger window corners
 - Extensions button beside the pinned extensions, opening the Extensions menu
 
 Unofficial and not affiliated with The Browser Company. Apple Silicon, macOS 14 or later.

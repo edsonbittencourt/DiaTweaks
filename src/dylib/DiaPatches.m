@@ -1,16 +1,18 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 typedef NS_ENUM(NSInteger, DPTweak) {
     DPEdgeToEdge, DPHideToolbar, DPSquareSidebarCorners, DPAnimatedCount,
-    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPShowExtensionsButton, DPRevealToolbarOnHover, DPTweakCount
+    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPHideChatsButton, DPHideDownloadsButton, DPHideRecentTabsButton, DPHidePinnedTabsBackground, DPHideWindowControls, DPHidePinnedTabBorder, DPLiquidGlassBackground, DPLargerWindowCorners, DPShowExtensionsButton, DPRevealToolbarOnHover, DPTweakCount
 };
 
-static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"extensionsButton", @"revealToolbarOnHover"};
-static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, YES, YES};
+static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"hideChatsButton", @"hideDownloadsButton", @"hideRecentTabsButton", @"hidePinnedTabsBackground", @"hideWindowControls", @"hidePinnedTabBorder", @"liquidGlassBackground", @"largerWindowCorners", @"extensionsButton", @"revealToolbarOnHover"};
+static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, NO, NO, NO, NO, NO, NO, NO, NO, YES, YES};
 static const CGFloat DPWindowPadding = 6;
 static const CFTimeInterval DPAnimationDuration = 0.25;
+static const CGFloat DPLargerCornerRadius = 26;
 static const CGFloat DPToolbarButtonSize = 30, DPToolbarSlot = 35;  // Dia's translate button and the gap after it
 static const CGFloat DPRevealEdge = 8;  // how near the top of the page the pointer brings back a hidden toolbar
 static const NSTimeInterval DPRevealDelay = 0.12, DPConcealDelay = 1.4;
@@ -19,7 +21,7 @@ static BOOL DPOn[DPTweakCount];
 static CGFloat DPProgress[DPAnimatedCount];
 static NSUserDefaults *DPDefaults;
 static NSHashTable<NSView *> *DPContainers, *DPPanes, *DPBars, *DPSuppressed;
-static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey, DPExtensionsKey, DPRevealedKey, DPPendingRevealKey;
+static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey, DPGlassKey, DPWindowColorKey, DPCornerRadiusKey, DPExtensionsKey, DPRevealedKey, DPPendingRevealKey;
 
 static NSString *DPCLI(void) {
     return [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject
@@ -63,12 +65,12 @@ static NSView *DPFindView(NSView *root, BOOL (^match)(NSView *)) {
 #pragma mark - Hooks
 
 typedef struct { Class cls; SEL sel; IMP imp; } DPOriginal;
-static DPOriginal DPOriginals[24];
+static DPOriginal DPOriginals[64];
 static int DPOriginalCount;
 
 static void DPHook(Class cls, SEL sel, IMP replacement) {
     Method method = cls ? class_getInstanceMethod(cls, sel) : NULL;
-    if (!method || method_getImplementation(method) == replacement || DPOriginalCount == 24) return;
+    if (!method || method_getImplementation(method) == replacement || DPOriginalCount == 64) return;
     IMP original = method_getImplementation(method);
     if (!class_addMethod(cls, sel, replacement, method_getTypeEncoding(method))) method_setImplementation(method, replacement);
     DPOriginals[DPOriginalCount++] = (DPOriginal){cls, sel, original};
@@ -85,12 +87,59 @@ static IMP DPOriginalIMP(id object, SEL sel) {
 
 #pragma mark - Toolbar buttons
 
+static Class DPDownloadsButtonClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC10TabSurface19DownloadsButtonView");
+}
+
+static Class DPChatsButtonClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC10DiaLibrary17LibraryButtonView");
+}
+
+static Class DPChatsRowClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC10TabSidebar15LibraryCellView");
+}
+
+static Class DPSidebarFooterClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC10TabSidebar26SidebarContainerFooterView");
+}
+
+static Class DPWindowControlsClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC5ARCUI21WindowStandardButtons");
+}
+
+static Class DPSelectionOutlineClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC5TabUIP33_CFF5B89D7BC9743BBA6108D119E2E37020SelectionOutlineView");
+}
+
+static Class DPPinnedTabsClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC8TabStrip16TabStripDockView");
+}
+
+static Class DPDebossedClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC5TabUI12DebossedView");
+}
+
 static NSInteger DPButtonTweak(NSView *view) {
     NSNumber *tweak = objc_getAssociatedObject(view, &DPButtonKey);
     if (tweak) return tweak.integerValue;
     NSString *label = view.accessibilityLabel;
     NSInteger match = [label isEqualToString:@"Chat with this tab"] ? DPHideChatButton
                     : [label isEqualToString:@"Toggle sidebar"]     ? DPHideSidebarButton
+                    : [label isEqualToString:@"Recent tabs"]        ? DPHideRecentTabsButton
+                    : [view isKindOfClass:DPDownloadsButtonClass()] ? DPHideDownloadsButton
+                    : [view isKindOfClass:DPChatsButtonClass()]     ? DPHideChatsButton
+                    : [view isKindOfClass:DPChatsRowClass()]        ? DPHideChatsButton
+                    : [view isKindOfClass:DPWindowControlsClass()]  ? DPHideWindowControls
+                    : [view isKindOfClass:DPSelectionOutlineClass()] ? DPHidePinnedTabBorder
+                    : [view isKindOfClass:DPDebossedClass()] && [view.superview isKindOfClass:DPPinnedTabsClass()] ? DPHidePinnedTabsBackground
                                                                     : -1;
     if (match >= 0) objc_setAssociatedObject(view, &DPButtonKey, @(match), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return match;
@@ -139,8 +188,85 @@ static void DPBar_layout(NSView *self, SEL _cmd) {
     DPApplyExtensionsButton(self);
 }
 
+// Dia lays out the tab strip's buttons here and closes the gap for Recent tabs, but not for Downloads.
+static void DPTabStrip_viewWillLayout(NSViewController *self, SEL _cmd) {
+    NSView *strip = self.view, *downloads = nil, *chats = nil;
+    [DPBars addObject:strip];
+    for (NSView *sub in strip.subviews) {
+        NSInteger tweak = DPButtonTweak(sub);
+        if (tweak < 0) continue;
+        DPEnforceButtons(sub);
+        if (tweak == DPHideDownloadsButton) downloads = sub;
+        if (tweak == DPHideChatsButton) chats = sub;
+    }
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    if (DPOn[DPHideDownloadsButton] && downloads && chats) [chats setFrameOrigin:downloads.frame.origin];
+}
+
+// With nothing left in it, the sidebar header shrinks to the window padding and the pinned tabs move up. It stays in place because it's what drags the window.
+static void DPCollapseSidebarHeader(NSView *sidebar) {
+    if (!DPOn[DPHideWindowControls]) return;
+    NSView *header = nil;
+    for (NSView *sub in sidebar.subviews) if ([sub isKindOfClass:NSClassFromString(@"_TtC10TabSidebar17SidebarHeaderView")]) header = sub;
+    NSView *stack = DPFindView(header, ^BOOL(NSView *v) { return [v isKindOfClass:NSStackView.class]; });
+    if (!stack) return;
+    for (NSView *item in stack.subviews) if (!item.hidden && item.subviews.count) return;
+    CGFloat bottom = NSMaxY(header.frame), gap = NSHeight(header.frame) - DPWindowPadding;
+    if (gap <= 0) return;
+    for (NSView *sub in sidebar.subviews) {
+        if (fabs(NSMinY(sub.frame) - bottom) > 0.5) continue;
+        NSRect frame = sub.frame;
+        frame.origin.y -= gap;
+        frame.size.height += gap;
+        sub.frame = frame;
+    }
+    [header setFrameSize:NSMakeSize(NSWidth(header.frame), DPWindowPadding)];
+}
+
+// With both of its items hidden the sidebar footer is an empty band, so the tab list takes its place.
+static void DPSidebar_viewWillLayout(NSViewController *self, SEL _cmd) {
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    NSView *sidebar = self.view, *footer = nil;
+    [DPBars addObject:sidebar];
+    DPCollapseSidebarHeader(sidebar);
+    for (NSView *sub in sidebar.subviews) if ([sub isKindOfClass:DPSidebarFooterClass()]) footer = sub;
+    if (!footer) return;
+    BOOL empty = DPOn[DPHideChatsButton] && DPOn[DPHideRecentTabsButton];
+    if (!empty) {
+        if ([DPSuppressed containsObject:footer]) footer.hidden = NO;
+        [DPSuppressed removeObject:footer];
+        return;
+    }
+    if (!footer.hidden) {
+        footer.hidden = YES;
+        [DPSuppressed addObject:footer];
+    }
+    for (NSView *sub in sidebar.subviews) {
+        if (fabs(NSMaxY(sub.frame) - NSMinY(footer.frame)) > 0.5) continue;
+        NSRect frame = sub.frame;
+        frame.size.height += NSHeight(footer.frame);
+        sub.frame = frame;
+    }
+}
+
+// The visible border is a masked gradient layer. Dia shows and hides it with selection and never touches its opacity.
+static void DPPinnedTab_layout(NSView *self, SEL _cmd) {
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    [DPBars addObject:self];
+    DPEnforceButtons(self);
+    for (CALayer *layer in self.subviews.firstObject.layer.sublayers)
+        if ([layer isKindOfClass:CAGradientLayer.class]) layer.opacity = DPOn[DPHidePinnedTabBorder] ? 0 : 1;
+}
+
+// Dia creates this background lazily, and each tab inside has a debossed view of its own, so only direct children count.
+static void DPPinnedTabs_layout(NSView *self, SEL _cmd) {
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    [DPBars addObject:self];
+    for (NSView *sub in self.subviews) if (DPButtonTweak(sub) >= 0) DPEnforceButtons(sub);
+}
+
 static void DPRelayoutBars(void) {
-    for (NSView *bar in DPBars) {
+    for (NSView *bar in DPBars.allObjects) {
         bar.needsLayout = YES;
         [bar layoutSubtreeIfNeeded];
     }
@@ -192,6 +318,12 @@ static NSRect DPEdgeToEdgeFrame(NSView *view, NSRect frame) {
     return frame;
 }
 
+// Keeps the page concentric with the window when the window's corners grow.
+static CGFloat DPWindowCornerGrowth(NSWindow *window) {
+    NSNumber *original = window ? objc_getAssociatedObject(window, &DPCornerRadiusKey) : nil;
+    return DPOn[DPLargerWindowCorners] && original ? DPLargerCornerRadius - original.doubleValue : 0;
+}
+
 static void DPSetCornerRadius(NSView *container, CGFloat inset) {
     static ptrdiff_t offset = -1;
     if (offset < 0) {
@@ -202,10 +334,11 @@ static void DPSetCornerRadius(NSView *container, CGFloat inset) {
     CGFloat *radius = (CGFloat *)((uint8_t *)(__bridge void *)container + offset);
     NSNumber *assigned = objc_getAssociatedObject(container, &DPAssignedRadiusKey);
     CGFloat base = assigned && assigned.doubleValue == *radius ? [objc_getAssociatedObject(container, &DPBaseRadiusKey) doubleValue] : *radius;
+    CGFloat target = base + inset + DPWindowCornerGrowth(container.window);
     objc_setAssociatedObject(container, &DPBaseRadiusKey, @(base), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(container, &DPAssignedRadiusKey, @(base + inset), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (*radius == base + inset) return;
-    *radius = base + inset;
+    objc_setAssociatedObject(container, &DPAssignedRadiusKey, @(target), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (*radius == target) return;
+    *radius = target;
     container.needsLayout = YES;
 }
 
@@ -462,6 +595,7 @@ static void DPMakeRoom_setFrame(NSView *self, SEL _cmd, NSRect frame) {
 // The button takes the translate button's slot beside the pinned extensions; the address bar gives up the room,
 // and the translate button, which Dia shows only on some pages, moves one slot left.
 static void DPApplyExtensionsButton(NSView *bar) {
+    if (![bar isKindOfClass:DPToolbarClass()]) return;  // DPBar_layout also runs for the sidebar's header and footer
     NSView *pinned = DPFindView(bar, ^BOOL(NSView *v) { return [v isKindOfClass:DPPinnedExtensionsClass()]; });
     NSView *address = DPFindView(bar, ^BOOL(NSView *v) { return [v isKindOfClass:DPAddressBarClass()]; });
     NSView *translate = DPFindView(bar, ^BOOL(NSView *v) { return [v isKindOfClass:DPTranslateButtonClass()]; });
@@ -604,6 +738,70 @@ static void DPConcealAll(void) {
     }
 }
 
+#pragma mark - Liquid Glass
+
+// Variant 17 is the system sidebar's glass; the default reads too clear at this size. The window has to stop being opaque for it to pick up what's behind.
+static void DPApplyGlass(NSView *frame) {
+    NSWindow *window = frame.window;
+    NSView *content = window.contentView, *background = nil, *tint = nil;
+    for (NSView *sub in content.subviews) {
+        NSString *name = NSStringFromClass(sub.class);
+        if ([name containsString:@"WindowFrameBackgroundView"]) background = sub;
+        if ([name containsString:@"WindowBackgroundOverlayTintView"]) tint = sub;
+    }
+    Class glassClass = NSClassFromString(@"NSGlassEffectView");
+    if (!background || !glassClass) return;
+    BOOL on = DPOn[DPLiquidGlassBackground];
+    NSView *glass = objc_getAssociatedObject(window, &DPGlassKey);
+    if (!on && !glass) return;
+    if (on && !glass) {
+        glass = [[glassClass alloc] initWithFrame:content.bounds];
+        glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [glass setValue:@17 forKey:@"_variant"];
+        [content addSubview:glass positioned:NSWindowBelow relativeTo:background];
+        objc_setAssociatedObject(window, &DPGlassKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(window, &DPWindowColorKey, window.backgroundColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else if (!on) {
+        [glass removeFromSuperview];
+        objc_setAssociatedObject(window, &DPGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    background.hidden = tint.hidden = on;
+    for (NSView *sub in frame.subviews) if ([sub isKindOfClass:NSVisualEffectView.class]) sub.hidden = on;
+    if (window.opaque == on) {
+        window.opaque = !on;
+        window.backgroundColor = on ? NSColor.clearColor : objc_getAssociatedObject(window, &DPWindowColorKey);
+    }
+}
+
+static void DPRelayout(void);
+
+static void DPApplyCorners(NSWindow *window) {
+    SEL getter = NSSelectorFromString(@"_cornerRadius"), setter = NSSelectorFromString(@"_setCornerRadius:");
+    if (![window respondsToSelector:getter] || ![window respondsToSelector:setter]) return;
+    CGFloat radius = ((CGFloat (*)(id, SEL))objc_msgSend)(window, getter);
+    NSNumber *original = objc_getAssociatedObject(window, &DPCornerRadiusKey);
+    CGFloat target = radius;
+    if (DPOn[DPLargerWindowCorners]) {
+        if (!original) objc_setAssociatedObject(window, &DPCornerRadiusKey, @(radius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        target = DPLargerCornerRadius;
+    } else if (original) {
+        objc_setAssociatedObject(window, &DPCornerRadiusKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        target = original.doubleValue;
+    }
+    if (radius == target) return;
+    ((void (*)(id, SEL, CGFloat))objc_msgSend)(window, setter, target);
+    ((void (*)(id, SEL))objc_msgSend)(window, NSSelectorFromString(@"_updateWindowCornerMask"));
+    [window invalidateShadow];
+    dispatch_async(dispatch_get_main_queue(), ^{ DPRelayout(); });
+}
+
+static void DPWindowFrame_layout(NSView *self, SEL _cmd) {
+    DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    [DPBars addObject:self];
+    DPApplyGlass(self);
+    DPApplyCorners(self.window);
+}
+
 #pragma mark - Animation
 
 static void DPRelayout(void) {
@@ -648,7 +846,7 @@ static void DPSetTweak(DPTweak tweak, BOOL on) {
     else if (tweak == DPRevealToolbarOnHover) {
         if (!on) DPConcealAll();
     } else {
-        if (on) for (NSView *bar in DPBars) DPEnforceButtons(bar);
+        if (on) for (NSView *bar in DPBars.allObjects) DPEnforceButtons(bar);
         else DPRestoreButtons(tweak);
         DPRelayoutBars();
     }
@@ -793,8 +991,21 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
     return tile;
 }
 
+@interface DPFlippedDocument : NSView
+@end
+@implementation DPFlippedDocument
+- (BOOL)isFlipped { return YES; }
+@end
+
+static const CGFloat DPPaneTitleHeight = 52;
+
 @interface DPPaneView : NSView
 @property (nonatomic, strong) NSArray<NSSwitch *> *toggles;
+@property (nonatomic, strong) NSArray<NSString *> *searchTexts;
+@property (nonatomic, strong) NSSearchField *searchField;
+@property (nonatomic, strong) NSTextField *noResults;
+@property (nonatomic, strong) NSView *tweakGroup;
+@property (nonatomic, strong) NSArray<NSView *> *hiddenWhenSearching, *tweakSection;
 @property (nonatomic, strong) NSTextField *status;
 @property (nonatomic, strong) NSButton *checkButton;
 @property (nonatomic, strong) NSButton *relaunchButton;
@@ -811,12 +1022,22 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
         {DPRevealToolbarOnHover, @"cursorarrow.motionlines", @"Show toolbar on hover", @"Bring the toolbar back over the page while the pointer is at its top edge."},
         {DPHideSidebarButton, @"sidebar.left", @"Hide sidebar button", @"Hide the sidebar toggle at the top left of the toolbar."},
         {DPHideChatButton, @"bubble.fill", @"Hide Chat button", @"Hide the Chat button at the top right of the toolbar."},
+        {DPHideChatsButton, @"doc.text", @"Hide Chats button", @"Hide the Chats button from the tab bar and sidebar."},
+        {DPHideDownloadsButton, @"arrow.down.circle", @"Hide downloads button", @"Hide the downloads button from the tab bar and sidebar."},
+        {DPHideRecentTabsButton, @"chevron.down", @"Hide recent tabs button", @"Hide the recent tabs button from the tab bar and sidebar."},
+        {DPHidePinnedTabsBackground, @"rectangle.dashed", @"Hide pinned tabs background", @"Remove the background behind the pinned tabs in the tab bar."},
+        {DPHideWindowControls, @"macwindow", @"Hide window controls", @"Hide the close, minimize, and maximize buttons."},
+        {DPHidePinnedTabBorder, @"square.dashed", @"Hide pinned tab border", @"Remove the border around the selected pinned tab."},
+        {DPLiquidGlassBackground, @"sparkles", @"Liquid Glass background", @"Use Liquid Glass behind the tab bar and sidebar instead of the theme color."},
+        {DPLargerWindowCorners, @"app", @"Larger window corners", @"Round the corners of browser windows to 26 points."},
         {DPShowExtensionsButton, @"puzzlepiece.extension", @"Extensions button", @"Open the Extensions menu from a button beside your pinned extensions."},
     };
-    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemTealColor, NSColor.systemOrangeColor, NSColor.systemPurpleColor, NSColor.systemGreenColor];
+    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemGrayColor, NSColor.systemOrangeColor, NSColor.systemPurpleColor, NSColor.systemTealColor, NSColor.systemGreenColor, NSColor.systemPinkColor, NSColor.systemBrownColor, NSColor.systemRedColor, NSColor.systemYellowColor, NSColor.systemCyanColor, NSColor.systemMintColor, NSColor.systemGreenColor];
     NSMutableArray<NSView *> *tweakRows = [NSMutableArray new];
     NSMutableArray<NSSwitch *> *toggles = [NSMutableArray new];
+    NSMutableArray<NSString *> *searchTexts = [NSMutableArray new];
     for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
+        if (rows[i].tweak == DPLiquidGlassBackground && !NSClassFromString(@"NSGlassEffectView")) continue;
         NSStackView *text = [NSStackView stackViewWithViews:@[
             DPLabel(rows[i].title, 13, NSFontWeightRegular, NSColor.labelColor),
             DPLabel(rows[i].detail, 11, NSFontWeightRegular, NSColor.secondaryLabelColor),
@@ -835,8 +1056,18 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
         toggle.action = @selector(toggle:);
         [toggles addObject:toggle];
         [tweakRows addObject:DPRow(leading, toggle)];
+        [searchTexts addObject:[NSString stringWithFormat:@"%@ %@%@", rows[i].title, rows[i].detail, rows[i].tweak == DPHideWindowControls ? @" traffic lights" : @""]];
     }
     _toggles = toggles;
+    _searchTexts = searchTexts;
+    _searchField = [NSSearchField new];
+    _searchField.target = self;
+    _searchField.action = @selector(search:);
+    _noResults = DPLabel(@"No Results", 13, NSFontWeightRegular, NSColor.secondaryLabelColor);
+    _noResults.hidden = YES;
+    NSTextField *interface = DPLabel(@"Interface", 12, NSFontWeightSemibold, NSColor.secondaryLabelColor);
+    _tweakGroup = DPGroup(tweakRows);
+    _tweakSection = @[interface, _tweakGroup];
     [self updateToggles];
 
     _status = DPLabel(@"", 12, NSFontWeightRegular, NSColor.secondaryLabelColor);
@@ -846,28 +1077,45 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
     _relaunchButton.hidden = YES;
     NSStackView *buttons = [NSStackView stackViewWithViews:@[_relaunchButton, _checkButton]];
     NSButton *restore = [NSButton buttonWithTitle:@"Restore…" target:self action:@selector(restore:)];
+    NSTextField *updates = DPLabel(@"Updates", 12, NSFontWeightSemibold, NSColor.secondaryLabelColor);
+    NSView *updatesGroup = DPGroup(@[
+        DPRow(_status, buttons),
+        DPRow(DPLabel(@"Restore the original Dia without patches.", 13, NSFontWeightRegular, NSColor.labelColor), restore),
+    ]);
+    NSTextField *notice = DPLabel(@"DiaPatches is unofficial and not affiliated with The Browser Company.", 11, NSFontWeightRegular, NSColor.tertiaryLabelColor);
+    _hiddenWhenSearching = @[updates, updatesGroup, notice];
 
-    NSStackView *content = [NSStackView stackViewWithViews:@[
-        DPLabel(@"Interface", 12, NSFontWeightSemibold, NSColor.secondaryLabelColor),
-        DPGroup(tweakRows),
-        DPLabel(@"Updates", 12, NSFontWeightSemibold, NSColor.secondaryLabelColor),
-        DPGroup(@[
-            DPRow(_status, buttons),
-            DPRow(DPLabel(@"Restore the original Dia without patches.", 13, NSFontWeightRegular, NSColor.labelColor), restore),
-        ]),
-        DPLabel(@"DiaPatches is unofficial and not affiliated with The Browser Company.", 11, NSFontWeightRegular, NSColor.tertiaryLabelColor),
-    ]];
+    NSStackView *content = [NSStackView stackViewWithViews:@[_searchField, interface, _tweakGroup, _noResults, updates, updatesGroup, notice]];
     content.orientation = NSUserInterfaceLayoutOrientationVertical;
     content.alignment = NSLayoutAttributeLeading;
     content.spacing = 8;
     for (NSView *v in content.arrangedSubviews) [v.widthAnchor constraintEqualToAnchor:content.widthAnchor].active = YES;
     content.translatesAutoresizingMaskIntoConstraints = NO;
-    [self addSubview:content];
-    NSLayoutConstraint *fill = [content.widthAnchor constraintEqualToAnchor:self.widthAnchor constant:-48];
+    // Dia's settings window has a fixed height, so the pane scrolls below the title.
+    DPFlippedDocument *document = [DPFlippedDocument new];
+    document.translatesAutoresizingMaskIntoConstraints = NO;
+    [document addSubview:content];
+    NSScrollView *scroll = [NSScrollView new];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.drawsBackground = NO;
+    scroll.hasVerticalScroller = YES;
+    scroll.autohidesScrollers = YES;
+    scroll.automaticallyAdjustsContentInsets = NO;
+    scroll.documentView = document;
+    [self addSubview:scroll];
+    NSLayoutConstraint *fill = [content.widthAnchor constraintEqualToAnchor:document.widthAnchor constant:-48];
     fill.priority = NSLayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
-        [content.topAnchor constraintEqualToAnchor:self.topAnchor constant:72],
-        [content.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:self.topAnchor constant:DPPaneTitleHeight],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [document.topAnchor constraintEqualToAnchor:scroll.contentView.topAnchor],
+        [document.leadingAnchor constraintEqualToAnchor:scroll.contentView.leadingAnchor],
+        [document.widthAnchor constraintEqualToAnchor:scroll.contentView.widthAnchor],
+        [content.topAnchor constraintEqualToAnchor:document.topAnchor constant:72 - DPPaneTitleHeight],
+        [content.bottomAnchor constraintEqualToAnchor:document.bottomAnchor constant:-20],
+        [content.centerXAnchor constraintEqualToAnchor:document.centerXAnchor],
         [content.widthAnchor constraintLessThanOrEqualToConstant:560],
         fill,
     ]];
@@ -895,15 +1143,35 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
         for (NSSwitch *toggle in self.toggles) {
             if (toggle.tag == DPHideSidebarButton || toggle.tag == DPHideChatButton || toggle.tag == DPShowExtensionsButton)
                 toggle.enabled = !DPOn[DPHideToolbar] || DPOn[DPRevealToolbarOnHover];
-            NSInteger parent = toggle.tag == DPSquareSidebarCorners ? DPEdgeToEdge : toggle.tag == DPRevealToolbarOnHover ? DPHideToolbar : -1;
-            if (parent < 0) continue;
-            NSView *row = toggle.superview;
-            NSArray *siblings = row.superview.subviews;
-            NSView *separator = siblings[[siblings indexOfObject:row] - 1];
-            row.hidden = separator.hidden = !DPOn[parent];
         }
+        [self updateVisibleRows];
         [self layoutSubtreeIfNeeded];
     }];
+}
+
+- (void)updateVisibleRows {
+    NSString *query = [self.searchField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSStringCompareOptions options = NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch;
+    __block BOOL any = NO;
+    [self.toggles enumerateObjectsUsingBlock:^(NSSwitch *toggle, NSUInteger i, BOOL *_) {
+        NSView *row = toggle.superview;
+        BOOL visible = (!query.length || [self.searchTexts[i] rangeOfString:query options:options].location != NSNotFound)
+            && (toggle.tag != DPSquareSidebarCorners || DPOn[DPEdgeToEdge]) && (toggle.tag != DPRevealToolbarOnHover || DPOn[DPHideToolbar]);
+        row.hidden = !visible;
+        if (i > 0) {
+            NSArray *siblings = row.superview.subviews;
+            NSView *separator = siblings[[siblings indexOfObject:row] - 1];
+            separator.hidden = !visible || !any;
+        }
+        any |= visible;
+    }];
+    for (NSView *view in self.tweakSection) view.hidden = !any;
+    for (NSView *view in self.hiddenWhenSearching) view.hidden = query.length > 0;
+    self.noResults.hidden = any;
+}
+
+- (void)search:(NSSearchField *)sender {
+    [self updateVisibleRows];
 }
 
 - (void)toggle:(NSSwitch *)sender {
@@ -1233,6 +1501,13 @@ __attribute__((constructor)) static void DPInit(void) {
     DPHook(DPToolbarClass(), @selector(hitTest:), (IMP)DPToolbar_hitTest);
     DPHook(DPAddressBarClass(), @selector(setFrame:), (IMP)DPMakeRoom_setFrame);
     DPHook(DPTranslateButtonClass(), @selector(setFrame:), (IMP)DPMakeRoom_setFrame);
+    DPHook(NSClassFromString(@"_TtC8TabStrip31TabStripContainerViewController"), @selector(viewWillLayout), (IMP)DPTabStrip_viewWillLayout);
+    DPHook(DPPinnedTabsClass(), @selector(layout), (IMP)DPPinnedTabs_layout);
+    DPHook(NSClassFromString(@"_TtC6Window24PlatformWindowThemeFrame"), @selector(layout), (IMP)DPWindowFrame_layout);
+    DPHook(NSClassFromString(@"_TtC5TabUI15TabDockItemView"), @selector(layout), (IMP)DPPinnedTab_layout);
+    DPHook(NSClassFromString(@"_TtC10TabSidebar30SidebarContainerViewController"), @selector(viewWillLayout), (IMP)DPSidebar_viewWillLayout);
+    DPHook(DPSidebarFooterClass(), @selector(layout), (IMP)DPBar_layout);
+    DPHook(NSClassFromString(@"_TtC10TabSidebar17SidebarHeaderView"), @selector(layout), (IMP)DPBar_layout);
     DPHook(NSClassFromString(DPSettingsControllerClass), @selector(viewDidAppear), (IMP)DPSettings_viewDidAppear);
 
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
