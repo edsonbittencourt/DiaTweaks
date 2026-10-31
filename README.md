@@ -4,9 +4,10 @@ Small tweaks for the [Dia](https://www.diabrowser.com) browser, kept in place wh
 
 - Edge-to-edge web content
 - Square corners by the sidebar
-- Hide toolbar
+- Hide toolbar, optionally shown over the page while the pointer is at its top edge
 - Hide sidebar button
 - Hide Chat button
+- Extensions button beside the pinned extensions, opening the Extensions menu
 
 Unofficial and not affiliated with The Browser Company. Apple Silicon, macOS 14 or later.
 

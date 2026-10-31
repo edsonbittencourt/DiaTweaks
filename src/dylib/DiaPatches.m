@@ -4,19 +4,22 @@
 
 typedef NS_ENUM(NSInteger, DPTweak) {
     DPEdgeToEdge, DPHideToolbar, DPSquareSidebarCorners, DPAnimatedCount,
-    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPTweakCount
+    DPHideChatButton = DPAnimatedCount, DPHideSidebarButton, DPShowExtensionsButton, DPRevealToolbarOnHover, DPTweakCount
 };
 
-static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton"};
-static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO};
+static NSString *const DPKeys[DPTweakCount] = {@"edgeToEdge", @"hideToolbar", @"squareSidebarCorners", @"hideChatButton", @"hideSidebarButton", @"extensionsButton", @"revealToolbarOnHover"};
+static const BOOL DPDefaultsOn[DPTweakCount] = {YES, NO, YES, NO, NO, YES, YES};
 static const CGFloat DPWindowPadding = 6;
 static const CFTimeInterval DPAnimationDuration = 0.25;
+static const CGFloat DPToolbarButtonSize = 30, DPToolbarSlot = 35;  // Dia's translate button and the gap after it
+static const CGFloat DPRevealEdge = 8;  // how near the top of the page the pointer brings back a hidden toolbar
+static const NSTimeInterval DPRevealDelay = 0.12, DPConcealDelay = 1.4;
 
 static BOOL DPOn[DPTweakCount];
 static CGFloat DPProgress[DPAnimatedCount];
 static NSUserDefaults *DPDefaults;
 static NSHashTable<NSView *> *DPContainers, *DPPanes, *DPBars, *DPSuppressed;
-static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey;
+static char DPRequestedFrameKey, DPAssignedFrameKey, DPButtonKey, DPBaseRadiusKey, DPAssignedRadiusKey, DPFillsKey, DPChatKey, DPOriginalPathKey, DPAssignedPathKey, DPExtensionsKey, DPRevealedKey, DPPendingRevealKey;
 
 static NSString *DPCLI(void) {
     return [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject
@@ -60,12 +63,12 @@ static NSView *DPFindView(NSView *root, BOOL (^match)(NSView *)) {
 #pragma mark - Hooks
 
 typedef struct { Class cls; SEL sel; IMP imp; } DPOriginal;
-static DPOriginal DPOriginals[16];
+static DPOriginal DPOriginals[24];
 static int DPOriginalCount;
 
 static void DPHook(Class cls, SEL sel, IMP replacement) {
     Method method = cls ? class_getInstanceMethod(cls, sel) : NULL;
-    if (!method || method_getImplementation(method) == replacement || DPOriginalCount == 16) return;
+    if (!method || method_getImplementation(method) == replacement || DPOriginalCount == 24) return;
     IMP original = method_getImplementation(method);
     if (!class_addMethod(cls, sel, replacement, method_getTypeEncoding(method))) method_setImplementation(method, replacement);
     DPOriginals[DPOriginalCount++] = (DPOriginal){cls, sel, original};
@@ -127,10 +130,13 @@ static BOOL DPEnforceButtons(NSView *view) {
     return changed;
 }
 
+static void DPApplyExtensionsButton(NSView *bar);
+
 static void DPBar_layout(NSView *self, SEL _cmd) {
     [DPBars addObject:self];
     DPEnforceButtons(self);
     DPCallOriginal(void (*)(id, SEL), self, _cmd);
+    DPApplyExtensionsButton(self);
 }
 
 static void DPRelayoutBars(void) {
@@ -364,21 +370,147 @@ static Class DPToolbarClass(void) {
     return cls = cls ?: NSClassFromString(@"_TtC13NavigationBar17NavigationBarView");
 }
 
+#pragma mark - Extensions button
+
+static NSMenu *DPExtensionsMenu(void) {
+    for (NSMenuItem *item in NSApp.mainMenu.itemArray)
+        if ([item.title isEqualToString:@"Extensions"]) return item.submenu;
+    return nil;
+}
+
+@interface DPExtensionsMenuButton : NSButton
+@end
+
+@implementation DPExtensionsMenuButton
+
+- (instancetype)init {
+    if (!(self = [super initWithFrame:NSZeroRect])) return nil;
+    self.bordered = NO;
+    self.imagePosition = NSImageOnly;
+    self.image = [NSImage imageWithSystemSymbolName:@"puzzlepiece.extension" accessibilityDescription:@"Extensions"];
+    self.symbolConfiguration = [NSImageSymbolConfiguration configurationWithPointSize:13 weight:NSFontWeightMedium];
+    self.contentTintColor = NSColor.secondaryLabelColor;
+    self.toolTip = @"Extensions";
+    self.target = self;
+    self.action = @selector(showExtensions:);
+    self.wantsLayer = YES;
+    self.layer.cornerRadius = 7;
+    self.layer.cornerCurve = kCACornerCurveContinuous;
+    [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                       options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect
+                                                         owner:self
+                                                      userInfo:nil]];
+    return self;
+}
+
+- (void)setHovered:(BOOL)hovered {
+    [self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+        self.layer.backgroundColor = hovered ? [NSColor.labelColor colorWithAlphaComponent:0.08].CGColor : nil;
+    }];
+}
+
+- (void)mouseEntered:(NSEvent *)event { [self setHovered:YES]; }
+- (void)mouseExited:(NSEvent *)event { [self setHovered:NO]; }
+
+// Like Dia's own menus, open on mouse down.
+- (void)mouseDown:(NSEvent *)event { [self showExtensions:self]; }
+
+- (void)showExtensions:(id)sender {
+    NSMenu *menu = DPExtensionsMenu();
+    if (!menu) return NSBeep();
+    [self setHovered:YES];
+    NSPoint below = NSMakePoint(NSMinX(self.bounds), self.isFlipped ? NSMaxY(self.bounds) + 4 : NSMinY(self.bounds) - 4);
+    [menu popUpMenuPositioningItem:nil atLocation:below inView:self];
+    [self setHovered:NO];
+}
+
+@end
+
+static Class DPPinnedExtensionsClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC16PinnedExtensions20PinnedExtensionsView");
+}
+
+static Class DPAddressBarClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC13NavigationBar16AssistantBarView");
+}
+
+static Class DPTranslateButtonClass(void) {
+    static Class cls;
+    return cls = cls ?: NSClassFromString(@"_TtC15TranslateButton19TranslateButtonView");
+}
+
+static BOOL DPExtensionsButtonShown(NSView *view) {
+    while (view && ![view isKindOfClass:DPToolbarClass()]) view = view.superview;
+    NSView *button = view ? objc_getAssociatedObject(view, &DPExtensionsKey) : nil;
+    return button && !button.hidden;
+}
+
+// Dia sizes the address bar and places the translate button outside the toolbar's layout pass.
+static void DPMakeRoom_setFrame(NSView *self, SEL _cmd, NSRect frame) {
+    NSRect adjusted = frame;
+    if (DPExtensionsButtonShown(self)) {
+        if ([self isKindOfClass:DPAddressBarClass()]) adjusted.size.width -= DPToolbarSlot;
+        else adjusted.origin.x -= DPToolbarSlot;
+    }
+    objc_setAssociatedObject(self, &DPRequestedFrameKey, [NSValue valueWithRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &DPAssignedFrameKey, [NSValue valueWithRect:adjusted], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    DPCallOriginal(void (*)(id, SEL, NSRect), self, _cmd, adjusted);
+}
+
+// The button takes the translate button's slot beside the pinned extensions; the address bar gives up the room,
+// and the translate button, which Dia shows only on some pages, moves one slot left.
+static void DPApplyExtensionsButton(NSView *bar) {
+    NSView *pinned = DPFindView(bar, ^BOOL(NSView *v) { return [v isKindOfClass:DPPinnedExtensionsClass()]; });
+    NSView *address = DPFindView(bar, ^BOOL(NSView *v) { return [v isKindOfClass:DPAddressBarClass()]; });
+    NSView *translate = DPFindView(bar, ^BOOL(NSView *v) { return [v isKindOfClass:DPTranslateButtonClass()]; });
+    DPExtensionsMenuButton *button = objc_getAssociatedObject(bar, &DPExtensionsKey);
+    BOOL on = DPOn[DPShowExtensionsButton] && pinned && !pinned.hidden && address;  // Dia hides extensions on its own pages
+    if (on && !button) {
+        button = [DPExtensionsMenuButton new];
+        objc_setAssociatedObject(bar, &DPExtensionsKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [bar addSubview:button];
+    }
+    button.hidden = !on;
+    // Reapplied through DPMakeRoom_setFrame.
+    if (address) address.frame = DPLaidOutFrame(address);
+    if (translate) translate.frame = DPLaidOutFrame(translate);
+    if (!on) return;
+    NSRect anchor = [bar convertRect:pinned.frame fromView:pinned.superview];
+    button.frame = NSMakeRect(NSMinX(anchor) - DPToolbarSlot, round(NSMidY(bar.bounds) - DPToolbarButtonSize / 2),
+                              DPToolbarButtonSize, DPToolbarButtonSize);
+}
+
+// A hidden toolbar shown on hover floats over the page instead of pushing it down.
+static BOOL DPRevealed(NSView *bar) { return [objc_getAssociatedObject(bar, &DPRevealedKey) boolValue]; }
+
 // The bar stays in Dia's layout: hiding it makes Dia reflow in ways it won't undo.
 static NSView *DPToolbar_hitTest(NSView *self, SEL _cmd, NSPoint point) {
-    return DPOn[DPHideToolbar] ? nil : DPCallOriginal(NSView *(*)(id, SEL, NSPoint), self, _cmd, point);
+    return DPOn[DPHideToolbar] && !DPRevealed(self) ? nil : DPCallOriginal(NSView *(*)(id, SEL, NSPoint), self, _cmd, point);
+}
+
+static NSView *DPPaneBar(NSView *pane) {
+    for (NSView *sub in pane.subviews) if ([sub isKindOfClass:DPToolbarClass()]) return sub;
+    return nil;
 }
 
 static void DPApplyToolbar(NSView *pane) {
-    NSView *bar = nil;
-    for (NSView *sub in pane.subviews) if ([sub isKindOfClass:DPToolbarClass()]) { bar = sub; break; }
+    NSView *bar = DPPaneBar(pane);
     if (!bar) return;
 
     CGFloat progress = DPProgress[DPHideToolbar];
-    bar.alphaValue = 1 - progress;
+    BOOL revealed = DPRevealed(bar), below = progress > 0 && !revealed;
+    bar.alphaValue = revealed ? 1 : 1 - progress;
     NSView *lowest = pane.subviews.firstObject;
-    if (progress > 0 && lowest != bar) [pane addSubview:bar positioned:NSWindowBelow relativeTo:lowest];
-    else if (progress == 0 && lowest == bar) [pane addSubview:bar positioned:NSWindowAbove relativeTo:nil];
+    if (below != (lowest == bar)) {
+        // Reordering removes the bar for a moment, which would take focus from the address bar.
+        NSWindow *window = pane.window;
+        NSResponder *focus = window.firstResponder;
+        if (below) [pane addSubview:bar positioned:NSWindowBelow relativeTo:lowest];
+        else [pane addSubview:bar positioned:NSWindowAbove relativeTo:nil];
+        if (window.firstResponder != focus) [window makeFirstResponder:focus];
+    }
 
     BOOL flipped = pane.isFlipped;
     CGFloat (^top)(NSRect) = ^CGFloat(NSRect r) { return flipped ? NSMinY(r) : NSHeight(pane.bounds) - NSMaxY(r); };
@@ -414,6 +546,62 @@ static void DPPane_layout(NSView *self, SEL _cmd) {
     DPCallOriginal(void (*)(id, SEL), self, _cmd);
     [DPPanes addObject:self];
     DPApplyToolbar(self);
+}
+
+#pragma mark - Toolbar on hover
+
+static void DPSetRevealed(NSView *pane, NSView *bar, BOOL revealed) {
+    objc_setAssociatedObject(bar, &DPPendingRevealKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (DPRevealed(bar) == revealed) return;
+    CGFloat from = bar.alphaValue;
+    objc_setAssociatedObject(bar, &DPRevealedKey, @(revealed), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    DPApplyToolbar(pane);
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @(from);
+    fade.duration = 0.15;
+    [bar.layer addAnimation:fade forKey:@"DPReveal"];
+}
+
+// Shown while the pointer is at the top edge or over the bar, and while the address bar has focus.
+static BOOL DPWantsReveal(NSView *pane, NSView *bar) {
+    NSWindow *window = pane.window;
+    NSResponder *focus = window.firstResponder;
+    if ([focus isKindOfClass:NSView.class] && [(NSView *)focus isDescendantOf:bar]) return YES;
+    NSPoint point = [pane convertPoint:window.mouseLocationOutsideOfEventStream fromView:nil];
+    if (point.x < 0 || point.x > NSWidth(pane.bounds)) return NO;
+    CGFloat depth = pane.isFlipped ? point.y : NSHeight(pane.bounds) - point.y;
+    CGFloat barBottom = pane.isFlipped ? NSMaxY(bar.frame) : NSHeight(pane.bounds) - NSMinY(bar.frame);
+    return depth > -2 * DPRevealEdge && depth <= (DPRevealed(bar) ? barBottom + 4 : DPRevealEdge);
+}
+
+static void DPScheduleReveal(NSView *pane, NSView *bar, BOOL wanted) {
+    NSNumber *pending = objc_getAssociatedObject(bar, &DPPendingRevealKey);
+    if (DPRevealed(bar) == wanted) {
+        objc_setAssociatedObject(bar, &DPPendingRevealKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
+    if (pending && pending.boolValue == wanted) return;
+    pending = @(wanted);
+    objc_setAssociatedObject(bar, &DPPendingRevealKey, pending, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSTimeInterval delay = wanted ? DPRevealDelay : DPConcealDelay;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (objc_getAssociatedObject(bar, &DPPendingRevealKey) == pending) DPSetRevealed(pane, bar, wanted);
+    });
+}
+
+static void DPUpdateReveal(NSWindow *window) {
+    if (!DPOn[DPHideToolbar] || !DPOn[DPRevealToolbarOnHover]) return;
+    for (NSView *pane in DPPanes) {
+        NSView *bar = DPPaneBar(pane);
+        if (bar) DPScheduleReveal(pane, bar, pane.window == window && DPWantsReveal(pane, bar));
+    }
+}
+
+static void DPConcealAll(void) {
+    for (NSView *pane in DPPanes) {
+        NSView *bar = DPPaneBar(pane);
+        if (bar) DPSetRevealed(pane, bar, NO);
+    }
 }
 
 #pragma mark - Animation
@@ -457,7 +645,9 @@ static void DPSetTweak(DPTweak tweak, BOOL on) {
     DPOn[tweak] = on;
     [DPDefaults setBool:on forKey:DPKeys[tweak]];
     if (tweak < DPAnimatedCount) DPAnimate();
-    else {
+    else if (tweak == DPRevealToolbarOnHover) {
+        if (!on) DPConcealAll();
+    } else {
         if (on) for (NSView *bar in DPBars) DPEnforceButtons(bar);
         else DPRestoreButtons(tweak);
         DPRelayoutBars();
@@ -618,10 +808,12 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
         {DPEdgeToEdge, @"squareshape.squareshape.dotted", @"Edge-to-edge web content", @"Remove the padding between web pages and the window edge."},
         {DPSquareSidebarCorners, @"square", @"Square corners by the sidebar", @"Let web pages meet the sidebar with straight edges."},
         {DPHideToolbar, @"menubar.rectangle", @"Hide toolbar", @"Remove the bar with the address, navigation buttons and extensions. Experimental."},
+        {DPRevealToolbarOnHover, @"cursorarrow.motionlines", @"Show toolbar on hover", @"Bring the toolbar back over the page while the pointer is at its top edge."},
         {DPHideSidebarButton, @"sidebar.left", @"Hide sidebar button", @"Hide the sidebar toggle at the top left of the toolbar."},
         {DPHideChatButton, @"bubble.fill", @"Hide Chat button", @"Hide the Chat button at the top right of the toolbar."},
+        {DPShowExtensionsButton, @"puzzlepiece.extension", @"Extensions button", @"Open the Extensions menu from a button beside your pinned extensions."},
     };
-    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemOrangeColor, NSColor.systemPurpleColor];
+    NSArray<NSColor *> *tints = @[NSColor.systemBlueColor, NSColor.systemIndigoColor, NSColor.systemGrayColor, NSColor.systemTealColor, NSColor.systemOrangeColor, NSColor.systemPurpleColor, NSColor.systemGreenColor];
     NSMutableArray<NSView *> *tweakRows = [NSMutableArray new];
     NSMutableArray<NSSwitch *> *toggles = [NSMutableArray new];
     for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
@@ -701,12 +893,14 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.allowsImplicitAnimation = YES;
         for (NSSwitch *toggle in self.toggles) {
-            if (toggle.tag == DPHideSidebarButton || toggle.tag == DPHideChatButton) toggle.enabled = !DPOn[DPHideToolbar];
-            if (toggle.tag != DPSquareSidebarCorners) continue;
+            if (toggle.tag == DPHideSidebarButton || toggle.tag == DPHideChatButton || toggle.tag == DPShowExtensionsButton)
+                toggle.enabled = !DPOn[DPHideToolbar] || DPOn[DPRevealToolbarOnHover];
+            NSInteger parent = toggle.tag == DPSquareSidebarCorners ? DPEdgeToEdge : toggle.tag == DPRevealToolbarOnHover ? DPHideToolbar : -1;
+            if (parent < 0) continue;
             NSView *row = toggle.superview;
             NSArray *siblings = row.superview.subviews;
             NSView *separator = siblings[[siblings indexOfObject:row] - 1];
-            row.hidden = separator.hidden = !DPOn[DPEdgeToEdge];
+            row.hidden = separator.hidden = !DPOn[parent];
         }
         [self layoutSubtreeIfNeeded];
     }];
@@ -1037,12 +1231,20 @@ __attribute__((constructor)) static void DPInit(void) {
     DPHook(NSClassFromString(@"_TtC11ContentPane15ContentPaneView"), @selector(layout), (IMP)DPPane_layout);
     DPHook(DPToolbarClass(), @selector(layout), (IMP)DPBar_layout);
     DPHook(DPToolbarClass(), @selector(hitTest:), (IMP)DPToolbar_hitTest);
+    DPHook(DPAddressBarClass(), @selector(setFrame:), (IMP)DPMakeRoom_setFrame);
+    DPHook(DPTranslateButtonClass(), @selector(setFrame:), (IMP)DPMakeRoom_setFrame);
     DPHook(NSClassFromString(DPSettingsControllerClass), @selector(viewDidAppear), (IMP)DPSettings_viewDidAppear);
 
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
     [center addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification *_) {
         DPInstallUpdateMenuItem();
         DPRunCLI(@[@"update"], nil);
+    }];
+    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved | NSEventMaskKeyDown | NSEventMaskLeftMouseUp
+                                          handler:^NSEvent *(NSEvent *event) {
+        NSWindow *window = event.window ?: NSApp.keyWindow;
+        dispatch_async(dispatch_get_main_queue(), ^{ DPUpdateReveal(window); });  // after the event moves focus
+        return event;
     }];
     [center addObserverForName:NSApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *_) {
         DPApplyStagedOnQuit();
