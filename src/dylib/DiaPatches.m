@@ -203,9 +203,38 @@ static void DPSetCornerRadius(NSView *container, CGFloat inset) {
     container.needsLayout = YES;
 }
 
+#pragma mark - Sidebar
+
+static BOOL DPSidebarShown;
+static void DPAnimate(void);
+
+// Docking the sidebar pushes the web content right; a floating or hidden sidebar leaves it at the window padding.
+static BOOL DPSidebarShownIn(NSWindow *window) {
+    CGFloat minX = CGFLOAT_MAX;
+    for (NSView *container in DPContainers) {
+        NSValue *requested = objc_getAssociatedObject(container, &DPRequestedFrameKey);
+        if (container.window != window || !requested) continue;
+        minX = MIN(minX, NSMinX([container.superview convertRect:requested.rectValue toView:nil]));
+    }
+    return minX != CGFLOAT_MAX && minX > DPWindowPadding + 1;
+}
+
+// The toolbar holds the address bar, so a hidden toolbar comes back while the sidebar is open.
+static CGFloat DPTarget(int tweak) {
+    return tweak == DPHideToolbar ? DPOn[tweak] && !DPSidebarShown : DPOn[tweak];
+}
+
+static void DPUpdateSidebarShown(void) {
+    BOOL shown = DPSidebarShownIn(NSApp.keyWindow);
+    if (shown == DPSidebarShown) return;
+    DPSidebarShown = shown;
+    if (DPOn[DPHideToolbar]) DPAnimate();
+}
+
 static void DPContainer_setFrame(NSView *self, SEL _cmd, NSRect frame) {
     objc_setAssociatedObject(self, &DPRequestedFrameKey, [NSValue valueWithRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [DPContainers addObject:self];
+    if (self.window.isKeyWindow) DPUpdateSidebarShown();
     NSRect adjusted = DPEdgeToEdgeFrame(self, frame);
     DPSetCornerRadius(self, NSEqualRects(adjusted, frame) ? 0 : DPProgress[DPEdgeToEdge] * DPWindowPadding);
     DPCallOriginal(void (*)(id, SEL, NSRect), self, _cmd, adjusted);
@@ -366,7 +395,7 @@ static Class DPToolbarClass(void) {
 
 // The bar stays in Dia's layout: hiding it makes Dia reflow in ways it won't undo.
 static NSView *DPToolbar_hitTest(NSView *self, SEL _cmd, NSPoint point) {
-    return DPOn[DPHideToolbar] ? nil : DPCallOriginal(NSView *(*)(id, SEL, NSPoint), self, _cmd, point);
+    return DPTarget(DPHideToolbar) ? nil : DPCallOriginal(NSView *(*)(id, SEL, NSPoint), self, _cmd, point);
 }
 
 static void DPApplyToolbar(NSView *pane) {
@@ -442,7 +471,7 @@ static void DPAnimate(void) {
         CGFloat elapsed = CACurrentMediaTime() - start, omega = 22;
         BOOL done = elapsed >= DPAnimationDuration * 2;
         CGFloat eased = done ? 1 : 1 - (1 + omega * elapsed) * exp(-omega * elapsed);
-        for (int i = 0; i < DPAnimatedCount; i++) DPProgress[i] = from[i] + (DPOn[i] - from[i]) * eased;
+        for (int i = 0; i < DPAnimatedCount; i++) DPProgress[i] = from[i] + (DPTarget(i) - from[i]) * eased;
         DPRelayout();
         if (done) {
             [t invalidate];
@@ -617,7 +646,7 @@ static NSView *DPIconTile(NSString *symbol, NSColor *color) {
     static const struct { DPTweak tweak; __unsafe_unretained NSString *symbol, *title, *detail; } rows[] = {
         {DPEdgeToEdge, @"squareshape.squareshape.dotted", @"Edge-to-edge web content", @"Remove the padding between web pages and the window edge."},
         {DPSquareSidebarCorners, @"square", @"Square corners by the sidebar", @"Let web pages meet the sidebar with straight edges."},
-        {DPHideToolbar, @"menubar.rectangle", @"Hide toolbar", @"Remove the bar with the address, navigation buttons and extensions. Experimental."},
+        {DPHideToolbar, @"menubar.rectangle", @"Hide toolbar", @"Remove the bar with the address, navigation buttons and extensions while the sidebar is closed. Experimental."},
         {DPHideSidebarButton, @"sidebar.left", @"Hide sidebar button", @"Hide the sidebar toggle at the top left of the toolbar."},
         {DPHideChatButton, @"bubble.fill", @"Hide Chat button", @"Hide the Chat button at the top right of the toolbar."},
     };
@@ -1040,6 +1069,9 @@ __attribute__((constructor)) static void DPInit(void) {
     DPHook(NSClassFromString(DPSettingsControllerClass), @selector(viewDidAppear), (IMP)DPSettings_viewDidAppear);
 
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserverForName:NSWindowDidBecomeKeyNotification object:nil queue:nil usingBlock:^(NSNotification *_) {
+        DPUpdateSidebarShown();
+    }];
     [center addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil usingBlock:^(NSNotification *_) {
         DPInstallUpdateMenuItem();
         DPRunCLI(@[@"update"], nil);
